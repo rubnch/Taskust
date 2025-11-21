@@ -237,6 +237,17 @@ enum TemplateCommands {
         /// Template name
         name: String,
     },
+    /// Edit a template
+    Edit {
+        /// Template name
+        name: String,
+        /// New project
+        #[arg(short, long)]
+        project: Option<String>,
+        /// New default duration
+        #[arg(short = 'H', long)]
+        hours: Option<f64>,
+    }
 }
 
 fn main() {
@@ -246,13 +257,14 @@ fn main() {
         Some(Commands::List { all }) => cmd_list(all),
         Some(Commands::Complete { id }) => cmd_complete(id, false),
         Some(Commands::Remove { id }) => cmd_remove(id, false),
-        Some(Commands::Edit { id, name, project, hours, due, recur }) => cmd_edit(id, name, project, hours, due, recur, false),
+        Some(Commands::Edit { id, name, project, hours, due, recur }) => cmd_edit(id, name, project, hours, Some(0.0), due, recur, false),
         Some(Commands::Log { id, hours }) => cmd_log(id, hours, false),
         Some(Commands::Estimate { id, remaining }) => cmd_estimate(id, remaining, false),
         Some(Commands::Template { command }) => match command {
             TemplateCommands::Add { name, project, hours } => cmd_template_add(name, project, hours, false),
             TemplateCommands::List => cmd_template_list(),
             TemplateCommands::Remove { name } => cmd_template_remove(name, false),
+            TemplateCommands::Edit { name, project, hours } => cmd_template_edit(name, project, hours, false),
         },
         Some(Commands::Reset { force }) => cmd_reset(force),
         Some(Commands::Completions { shell }) => {

@@ -417,15 +417,15 @@ impl App {
             InputMode::Editing => {
                 if let Some(id) = self.target_id {
                     match self.input_field {
-                        InputField::Name => cmd_edit(id, Some(self.input_buffer.clone()), None, None, None, None, true),
-                        InputField::Project => cmd_edit(id, None, Some(self.input_buffer.clone()), None, None, None, true),
-                        InputField::Due => cmd_edit(id, None, None, None, Some(self.input_buffer.clone()), None, true),
+                        InputField::Name => cmd_edit(id, Some(self.input_buffer.clone()), None, None, None, None, None, true),
+                        InputField::Project => cmd_edit(id, None, Some(self.input_buffer.clone()), None, None, None, None, true),
+                        InputField::Due => cmd_edit(id, None, None, None, None, Some(self.input_buffer.clone()), None, true),
                         InputField::Hours => {
                             if let Ok(h) = self.input_buffer.parse::<f64>() {
-                                cmd_edit(id, None, None, Some(h), None, None, true);
+                                cmd_edit(id, None, None, Some(h), None, None, None, true);
                             }
                         },
-                        InputField::Recur => cmd_edit(id, None, None, None, None, Some(self.input_buffer.clone()), true),
+                        InputField::Recur => cmd_edit(id, None, None, None, None, None, Some(self.input_buffer.clone()), true),
                         InputField::LogHours => {
                             if let Ok(h) = self.input_buffer.parse::<f64>() {
                                 cmd_log(id, h, true);

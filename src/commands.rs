@@ -32,20 +32,7 @@ pub fn cmd_add(name: String, project: Option<String>, hours: Option<f64>, due: S
                 final_project = tmpl.project.clone();
             }
             if hours.is_none() {
-                // Learning logic: check history
-                let tasks = load_tasks();
-                let completed_with_template: Vec<&Task> = tasks.iter()
-                    .filter(|t| t.completed && t.template.as_ref() == Some(t_name))
-                    .collect();
-                
-                if !completed_with_template.is_empty() {
-                    let total_worked: f64 = completed_with_template.iter().map(|t| t.hours_worked).sum();
-                    let avg = total_worked / completed_with_template.len() as f64;
-                    if !silent { println!("Using average duration from {} completed tasks: {:.2}h", completed_with_template.len(), avg); }
-                    final_hours = avg;
-                } else {
-                    final_hours = tmpl.default_hours;
-                }
+                final_hours = tmpl.default_hours;
             }
         } else {
             if !silent { println!("Template '{}' not found. Creating it.", t_name); }
@@ -89,6 +76,7 @@ pub fn cmd_add(name: String, project: Option<String>, hours: Option<f64>, due: S
 pub fn cmd_complete(id: u64, silent: bool) {
     let mut tasks = load_tasks();
     let mut new_task: Option<Task> = None;
+    let mut template_update_info: Option<(String, f64)> = None;
 
     if let Some(t) = tasks.iter_mut().find(|t| t.id == id) {
         t.completed = true;
@@ -121,6 +109,10 @@ pub fn cmd_complete(id: u64, silent: bool) {
                 if !silent { println!("Recurring task created due on {}", due); }
             }
         }
+
+        if let Some(template) = &t.template {
+            template_update_info = Some((template.clone(), t.hours_worked));
+        }
     } else {
         if !silent { eprintln!("Task {} not found.", id); }
         return;
@@ -134,6 +126,31 @@ pub fn cmd_complete(id: u64, silent: bool) {
 
     if let Err(e) = save_tasks(&tasks) {
         if !silent { eprintln!("Failed to save tasks: {}", e); }
+        return;
+    }
+
+    // Update template average duration
+    if let Some((tmpl_name, _)) = template_update_info {
+        let completed_with_template: Vec<&Task> = tasks.iter()
+            .filter(|t| t.completed && t.template.as_ref() == Some(&tmpl_name))
+            .collect();
+        
+        if !completed_with_template.is_empty() {
+            let total_worked: f64 = completed_with_template.iter().map(|t| t.hours_worked).sum();
+            let avg = total_worked / completed_with_template.len() as f64;
+            
+            let mut templates = load_templates();
+            if let Some(tmpl) = templates.iter_mut().find(|t| t.name == tmpl_name) {
+                if !silent { 
+                    println!("Updating template '{}' average duration to {:.2}h (based on {} tasks)", 
+                        tmpl_name, avg, completed_with_template.len()); 
+                }
+                tmpl.default_hours = avg;
+                if let Err(e) = save_templates(&templates) {
+                    if !silent { eprintln!("Failed to save templates: {}", e); }
+                }
+            }
+        }
     }
 }
 
@@ -154,12 +171,13 @@ pub fn cmd_remove(id: u64, silent: bool) {
 }
 
 /// Edits an existing task's details.
-pub fn cmd_edit(id: u64, name: Option<String>, project: Option<String>, hours: Option<f64>, due: Option<String>, recur: Option<String>, silent: bool) {
+pub fn cmd_edit(id: u64, name: Option<String>, project: Option<String>, expected_hours: Option<f64>, hours_worked: Option<f64>, due: Option<String>, recur: Option<String>, silent: bool) {
     let mut tasks = load_tasks();
     if let Some(t) = tasks.iter_mut().find(|t| t.id == id) {
         if let Some(n) = name { t.name = n; }
         if let Some(p) = project { t.project = Some(p); }
-        if let Some(h) = hours { t.expected_hours = h; }
+        if let Some(h) = expected_hours { t.expected_hours = h; }
+        if let Some(h) = hours_worked { t.hours_worked = h; }
         if let Some(r) = recur { t.recurrence = Some(r); }
         if let Some(d) = due {
              match NaiveDate::parse_from_str(&d, "%Y-%m-%d") {
@@ -181,53 +199,26 @@ pub fn cmd_edit(id: u64, name: Option<String>, project: Option<String>, hours: O
 }
 
 /// Logs hours worked on a specific task.
+/// 
+/// hours_worked += hours
 pub fn cmd_log(id: u64, hours: f64, silent: bool) {
-    let mut tasks = load_tasks();
-    let mut total_worked = 0.0;
-    let mut found = false;
-
-    if let Some(t) = tasks.iter_mut().find(|t| t.id == id) {
-        t.hours_worked += hours;
-        total_worked = t.hours_worked;
-        found = true;
-    }
-
-    if found {
-        if let Err(e) = save_tasks(&tasks) {
-            if !silent { eprintln!("Failed to save tasks: {}", e); }
-        } else {
-            if !silent { println!("Logged {:.2}h to task {}. Total worked: {:.2}h", hours, id, total_worked); }
-        }
-    } else {
-        if !silent { eprintln!("Task {} not found.", id); }
+    match load_tasks().iter().find(|t| t.id == id).map(|t| t.hours_worked) {
+        Some(h) => {
+            cmd_edit(id, None, None, None, Some(h + hours), None, None, silent);
+        },
+        None => { if !silent { eprintln!("Task {} not found.", id); } },
     }
 }
 
 /// Updates the estimated remaining hours for a task.
 ///
-/// This recalculates the total expected hours as `hours_worked + remaining`.
+/// expected_hours = hours_worked + remaining
 pub fn cmd_estimate(id: u64, remaining: f64, silent: bool) {
-    let mut tasks = load_tasks();
-    let mut new_total = 0.0;
-    let mut worked = 0.0;
-    let mut found = false;
-
-    if let Some(t) = tasks.iter_mut().find(|t| t.id == id) {
-        new_total = t.hours_worked + remaining;
-        t.expected_hours = new_total;
-        worked = t.hours_worked;
-        found = true;
-    }
-
-    if found {
-        if let Err(e) = save_tasks(&tasks) {
-            if !silent { eprintln!("Failed to save tasks: {}", e); }
-        } else {
-            if !silent { println!("Updated task {} estimate. Total expected: {:.2}h (Worked: {:.2}h + Remaining: {:.2}h)", 
-                id, new_total, worked, remaining); }
-        }
-    } else {
-        if !silent { eprintln!("Task {} not found.", id); }
+    match load_tasks().iter().find(|t| t.id == id).map(|t| t.hours_worked) {
+        Some(hours_worked) => {
+            cmd_edit(id, None, None, Some(hours_worked + remaining), None, None, None, silent);
+        },
+        None => { if !silent { eprintln!("Task {} not found.", id); } },
     }
 }
 
@@ -392,5 +383,24 @@ pub fn cmd_reset(force: bool) {
         eprintln!("Failed to reset database: {}", e);
     } else {
         println!("Database reset successfully.");
+    }
+}
+
+pub fn cmd_template_edit(name: String, project: Option<String>, hours: Option<f64>, silent: bool) {
+    let mut templates = load_templates();
+    if let Some(t) = templates.iter_mut().find(|t| t.name == name) {
+        if let Some(p) = project {
+            t.project = Some(p);
+        }
+        if let Some(h) = hours {
+            t.default_hours = h;
+        }
+        if let Err(e) = save_templates(&templates) {
+            if !silent { eprintln!("Failed to save templates: {}", e); }
+        } else {
+            if !silent { println!("Template '{}' updated.", name); }
+        }
+    } else {
+        if !silent { eprintln!("Template '{}' not found.", name); }
     }
 }
