@@ -110,17 +110,11 @@
 //! 2.  **Estimated Effort**: Larger tasks due soon are prioritized over smaller ones.
 
 
-mod models;
-mod storage;
-mod urgency;
-mod commands;
-mod tui;
-
 use clap::{CommandFactory, Parser, Subcommand};
 use clap_complete::{generate, Shell};
 use std::io;
-use commands::*;
-use tui::run_tui;
+use taskust::commands::*;
+use taskust::tui::run_tui;
 
 #[derive(Parser)]
 #[command(name = "taskust")]

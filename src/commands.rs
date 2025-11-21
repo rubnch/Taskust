@@ -519,3 +519,4 @@ fn create_template_if_missing(name: &str, project: &Option<String>, hours: f64, 
         });
     }
 }
+

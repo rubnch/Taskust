@@ -26,3 +26,4 @@ pub fn compute_urgency(task: &Task) -> f64 {
     // clamp to a reasonable range
     if base.is_finite() { base } else { 0.0 }
 }
+
