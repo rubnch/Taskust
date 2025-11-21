@@ -114,7 +114,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
 
     let help_text = match app.input_mode {
         InputMode::Normal => match app.view_mode {
-            ViewMode::Tasks => "q: Quit | a: Add | n: Name | p: Proj | t: Due | h: Hrs | r: Recur | l: Log | u: Est | c: Toggle Done | Space: Done | d: Del | v: View Templates",
+            ViewMode::Tasks => "q: Quit | a: Add | n: Name | p: Proj | t: Due | h: Hrs | r: Recur | m: Tmpl | l: Log | u: Est | c: Toggle Done | Space: Done | d: Del | v: View Templates",
             ViewMode::Templates => "q: Quit | a: Add | v: View Tasks | Enter: Create Task from Template | d: Del",
         },
         InputMode::Editing => "Enter: Save | Esc: Cancel",
@@ -174,6 +174,7 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         InputField::Due => "Edit Due Date (YYYY-MM-DD)",
                         InputField::Hours => "Edit Expected Hours",
                         InputField::Recur => "Edit Recurrence",
+                        InputField::Template => "Edit Template",
                         InputField::LogHours => "Log Hours Worked",
                         InputField::EstimateHours => "Update Estimate (Remaining)",
                         _ => "Edit",

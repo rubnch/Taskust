@@ -3,7 +3,7 @@ use chrono::{Local, NaiveDate, Duration};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use crate::models::{Task, Template};
-use crate::storage::{load_tasks, save_tasks, load_templates, save_templates, delete_database};
+use crate::storage::{delete_database, load_task, load_tasks, load_template, load_templates, save_tasks, save_task, save_templates};
 use crate::urgency::compute_urgency;
 
 /// Adds a new task to the database.
@@ -11,10 +11,10 @@ use crate::urgency::compute_urgency;
 /// If a `template_name` is provided, it attempts to use defaults from that template.
 /// It also checks past completed tasks of that template to estimate duration intelligently.
 pub fn cmd_add(name: String, project: Option<String>, hours: Option<f64>, due: String, template_name: Option<String>, recur: Option<String>, silent: bool) {
-    let due_date = match NaiveDate::parse_from_str(&due, "%Y-%m-%d") {
+    let due_date = match parse_date(&due) {
         Ok(d) => d,
         Err(e) => {
-            if !silent { eprintln!("Invalid due date '{}': {}. Use YYYY-MM-DD.", due, e); }
+            if !silent { eprintln!("{}", e); }
             return;
         }
     };
@@ -23,11 +23,7 @@ pub fn cmd_add(name: String, project: Option<String>, hours: Option<f64>, due: S
     let mut final_hours = hours.unwrap_or(1.0);
 
     if let Some(t_name) = &template_name {
-        let mut templates = load_templates();
-        let template_idx = templates.iter().position(|t| t.name == *t_name);
-
-        if let Some(idx) = template_idx {
-            let tmpl = &templates[idx];
+        if let Some(tmpl) = load_template(t_name) {
             if final_project.is_none() {
                 final_project = tmpl.project.clone();
             }
@@ -36,190 +32,160 @@ pub fn cmd_add(name: String, project: Option<String>, hours: Option<f64>, due: S
             }
         } else {
             if !silent { println!("Template '{}' not found. Creating it.", t_name); }
-            let new_tmpl = Template {
-                name: t_name.clone(),
-                project: final_project.clone(),
-                default_hours: final_hours,
-            };
-            templates.push(new_tmpl);
-            if let Err(e) = save_templates(&templates) {
-                if !silent { eprintln!("Failed to save new template: {}", e); }
-            }
+            modify_templates(silent, |templates| {
+                templates.push(Template {
+                    name: t_name.clone(),
+                    project: final_project.clone(),
+                    default_hours: final_hours,
+                });
+                None
+            });
         }
     }
 
-    let mut tasks = load_tasks();
-    let next_id = tasks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
-    let t = Task {
-        id: next_id,
-        name,
-        project: final_project,
-        expected_hours: final_hours.max(0.0),
-        due_date,
-        created_at: Local::now().to_rfc3339(),
-        completed: false,
-        hours_worked: 0.0,
-        template: template_name,
-        recurrence: recur,
-    };
-    tasks.push(t);
-    if let Err(e) = save_tasks(&tasks) {
-        if !silent { eprintln!("Failed to save tasks: {}", e); }
-    } else {
-        if !silent { println!("Task added (id = {})", next_id); }
-    }
+    modify_tasks(silent, |tasks| {
+        let next_id = tasks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+        let t = Task {
+            id: next_id,
+            name,
+            project: final_project,
+            expected_hours: final_hours.max(0.0),
+            due_date,
+            created_at: Local::now().to_rfc3339(),
+            completed: false,
+            hours_worked: 0.0,
+            template: template_name,
+            recurrence: recur,
+        };
+        tasks.push(t);
+        Some(format!("Task added (id = {})", next_id))
+    });
 }
 
 /// Marks a task as complete by ID.
 ///
 /// If the task is recurring, a new task is created with the next due date.
 pub fn cmd_complete(id: u64, silent: bool) {
-    let mut tasks = load_tasks();
-    let mut new_task: Option<Task> = None;
-    let mut template_update_info: Option<(String, f64)> = None;
+    let mut template_to_update: Option<String> = None;
 
-    if let Some(t) = tasks.iter_mut().find(|t| t.id == id) {
-        t.completed = true;
-        if !silent { println!("Task {} marked as complete.", id); }
+    modify_tasks(silent, |tasks| {
+        let mut new_task: Option<Task> = None;
+        
+        if let Some(t) = tasks.iter_mut().find(|t| t.id == id) {
+            t.completed = true;
+            if !silent { println!("Task {} marked as complete.", id); }
 
-        if let Some(recur) = &t.recurrence {
-            let next_due = match recur.to_lowercase().as_str() {
-                "daily" => Some(t.due_date + Duration::days(1)),
-                "weekly" => Some(t.due_date + Duration::weeks(1)),
-                "monthly" => Some(t.due_date + Duration::days(30)), // Approximation
-                _ => {
-                    if !silent { eprintln!("Unknown recurrence pattern '{}'. Supported: daily, weekly, monthly.", recur); }
-                    None
+            if let Some(recur) = &t.recurrence {
+                if let Some(due) = get_next_recurrence(recur, t.due_date) {
+                    new_task = Some(Task {
+                        id: 0, // Placeholder
+                        name: t.name.clone(),
+                        project: t.project.clone(),
+                        expected_hours: t.expected_hours,
+                        due_date: due,
+                        created_at: Local::now().to_rfc3339(),
+                        completed: false,
+                        hours_worked: 0.0,
+                        template: t.template.clone(),
+                        recurrence: t.recurrence.clone(),
+                    });
+                    if !silent { println!("Recurring task created due on {}", due); }
+                } else if !silent {
+                    eprintln!("Unknown recurrence pattern '{}'. Supported: daily, weekly, monthly.", recur);
                 }
-            };
-
-            if let Some(due) = next_due {
-                new_task = Some(Task {
-                    id: 0, // Placeholder
-                    name: t.name.clone(),
-                    project: t.project.clone(),
-                    expected_hours: t.expected_hours,
-                    due_date: due,
-                    created_at: Local::now().to_rfc3339(),
-                    completed: false,
-                    hours_worked: 0.0,
-                    template: t.template.clone(),
-                    recurrence: t.recurrence.clone(),
-                });
-                if !silent { println!("Recurring task created due on {}", due); }
             }
+
+            if let Some(template) = &t.template {
+                template_to_update = Some(template.clone());
+            }
+        } else {
+            if !silent { eprintln!("Task {} not found.", id); }
+            return None;
         }
 
-        if let Some(template) = &t.template {
-            template_update_info = Some((template.clone(), t.hours_worked));
+        if let Some(mut nt) = new_task {
+            let next_id = tasks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+            nt.id = next_id;
+            tasks.push(nt);
         }
-    } else {
-        if !silent { eprintln!("Task {} not found.", id); }
-        return;
-    }
-
-    if let Some(mut nt) = new_task {
-        let next_id = tasks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
-        nt.id = next_id;
-        tasks.push(nt);
-    }
-
-    if let Err(e) = save_tasks(&tasks) {
-        if !silent { eprintln!("Failed to save tasks: {}", e); }
-        return;
-    }
+        
+        // Return empty string to signal save but no extra print (we printed inside)
+        Some(String::new())
+    });
 
     // Update template average duration
-    if let Some((tmpl_name, _)) = template_update_info {
-        let completed_with_template: Vec<&Task> = tasks.iter()
-            .filter(|t| t.completed && t.template.as_ref() == Some(&tmpl_name))
-            .collect();
-        
-        if !completed_with_template.is_empty() {
-            let total_worked: f64 = completed_with_template.iter().map(|t| t.hours_worked).sum();
-            let avg = total_worked / completed_with_template.len() as f64;
-            
-            let mut templates = load_templates();
-            if let Some(tmpl) = templates.iter_mut().find(|t| t.name == tmpl_name) {
-                if !silent { 
-                    println!("Updating template '{}' average duration to {:.2}h (based on {} tasks)", 
-                        tmpl_name, avg, completed_with_template.len()); 
-                }
-                tmpl.default_hours = avg;
-                if let Err(e) = save_templates(&templates) {
-                    if !silent { eprintln!("Failed to save templates: {}", e); }
-                }
-            }
-        }
+    if let Some(tmpl_name) = template_to_update {
+        recalculate_template_average(&tmpl_name, silent);
     }
 }
 
 /// Removes a task from the database by ID.
 pub fn cmd_remove(id: u64, silent: bool) {
-    let mut tasks = load_tasks();
-    let len_before = tasks.len();
-    tasks.retain(|t| t.id != id);
-    if tasks.len() == len_before {
-        if !silent { eprintln!("Task {} not found.", id); }
-    } else {
-        if let Err(e) = save_tasks(&tasks) {
-            if !silent { eprintln!("Failed to save tasks: {}", e); }
+    modify_tasks(silent, |tasks| {
+        let len_before = tasks.len();
+        tasks.retain(|t| t.id != id);
+        if tasks.len() == len_before {
+            if !silent { eprintln!("Task {} not found.", id); }
+            None
         } else {
-            if !silent { println!("Task {} removed.", id); }
+            Some(format!("Task {} removed.", id))
         }
-    }
+    });
 }
 
 /// Edits an existing task's details.
-pub fn cmd_edit(id: u64, name: Option<String>, project: Option<String>, expected_hours: Option<f64>, hours_worked: Option<f64>, due: Option<String>, recur: Option<String>, silent: bool) {
-    let mut tasks = load_tasks();
-    if let Some(t) = tasks.iter_mut().find(|t| t.id == id) {
-        if let Some(n) = name { t.name = n; }
-        if let Some(p) = project { t.project = Some(p); }
-        if let Some(h) = expected_hours { t.expected_hours = h; }
-        if let Some(h) = hours_worked { t.hours_worked = h; }
-        if let Some(r) = recur { t.recurrence = Some(r); }
+pub fn cmd_edit(
+    id: u64, 
+    name: Option<String>, 
+    project: Option<String>, 
+    template_name: Option<String>,
+    expected_hours: Option<f64>, 
+    hours_worked: Option<f64>, 
+    due: Option<String>, 
+    recur: Option<String>, 
+    silent: bool
+) {
+    modify_task(id, silent, |task| {
+        if let Some(n) = name { task.name = n; }
+        if let Some(p) = project { task.project = Some(p); }
+        if let Some(tmpl) = template_name { task.template = Some(tmpl); }
+        if let Some(h) = expected_hours { task.expected_hours = h; }
+        if let Some(h) = hours_worked { task.hours_worked = h; }
+        if let Some(r) = recur { task.recurrence = Some(r); }
         if let Some(d) = due {
-             match NaiveDate::parse_from_str(&d, "%Y-%m-%d") {
-                Ok(date) => t.due_date = date,
+             match parse_date(&d) {
+                Ok(date) => task.due_date = date,
                 Err(e) => {
-                    if !silent { eprintln!("Invalid due date '{}': {}. Use YYYY-MM-DD.", d, e); }
-                    return;
+                    if !silent { eprintln!("{}", e); }
+                    return None;
                 }
             }
         }
-        if let Err(e) = save_tasks(&tasks) {
-            if !silent { eprintln!("Failed to save tasks: {}", e); }
-        } else {
-            if !silent { println!("Task {} updated.", id); }
-        }
-    } else {
-        if !silent { eprintln!("Task {} not found.", id); }
-    }
+        Some(format!("Task {} updated.", id))
+    });
 }
 
 /// Logs hours worked on a specific task.
 /// 
 /// hours_worked += hours
 pub fn cmd_log(id: u64, hours: f64, silent: bool) {
-    match load_tasks().iter().find(|t| t.id == id).map(|t| t.hours_worked) {
-        Some(h) => {
-            cmd_edit(id, None, None, None, Some(h + hours), None, None, silent);
-        },
-        None => { if !silent { eprintln!("Task {} not found.", id); } },
-    }
+    modify_task(id, silent, |task| {
+        task.hours_worked += hours;
+        Some(format!("Logged {:.2} hours to task {}. Total worked: {:.2} hours.", hours, id, task.hours_worked))
+    });
 }
 
 /// Updates the estimated remaining hours for a task.
 ///
 /// expected_hours = hours_worked + remaining
 pub fn cmd_estimate(id: u64, remaining: f64, silent: bool) {
-    match load_tasks().iter().find(|t| t.id == id).map(|t| t.hours_worked) {
-        Some(hours_worked) => {
-            cmd_edit(id, None, None, Some(hours_worked + remaining), None, None, None, silent);
-        },
-        None => { if !silent { eprintln!("Task {} not found.", id); } },
-    }
+    modify_task(id, silent, |task| {
+        let new_total = task.hours_worked + remaining;
+        let worked = task.hours_worked;
+        task.expected_hours = new_total;
+        Some(format!("Updated task {} estimate. Total expected: {:.2}h (Worked: {:.2}h + Remaining: {:.2}h)", 
+                id, new_total, worked, remaining))
+    });
 }
 
 /// Lists tasks in a formatted table, sorted by urgency.
@@ -257,40 +223,7 @@ pub fn cmd_list(all: bool) {
     let today = Local::now().date_naive();
 
     for t in tasks {
-        let urgency = compute_urgency(&t);
-        let days_left = (t.due_date - today).num_days();
-        let time_left_str = if days_left < 0 {
-            format!("{}d overdue", days_left.abs())
-        } else if days_left == 0 {
-            "Today".to_string()
-        } else {
-            format!("{}d", days_left)
-        };
-
-        let urgency_color = if t.completed {
-            Color::Grey
-        } else if urgency > 50.0 {
-            Color::Red
-        } else if urgency > 20.0 {
-            Color::Yellow
-        } else {
-            Color::Green
-        };
-
-        let status = if t.completed { "Done" } else { "Pending" };
-        let status_color = if t.completed { Color::Green } else { Color::Yellow };
-
-        table.add_row(vec![
-            Cell::new(t.id),
-            Cell::new(&t.name),
-            Cell::new(t.project.unwrap_or_default()),
-            Cell::new(t.due_date),
-            Cell::new(time_left_str).fg(if days_left < 0 && !t.completed { Color::Red } else { Color::Reset }),
-            Cell::new(format!("{:.1}", t.hours_worked)),
-            Cell::new(format!("{:.1}", t.expected_hours)),
-            Cell::new(format!("{:.1}", urgency)).fg(urgency_color),
-            Cell::new(status).fg(status_color),
-        ]);
+        table.add_row(create_task_row(&t, today));
     }
 
     println!("{table}");
@@ -298,17 +231,14 @@ pub fn cmd_list(all: bool) {
 
 /// Adds a new task template.
 pub fn cmd_template_add(name: String, project: Option<String>, hours: f64, silent: bool) {
-    let mut templates = load_templates();
-    if templates.iter().any(|t| t.name == name) {
-        if !silent { eprintln!("Template '{}' already exists.", name); }
-        return;
-    }
-    templates.push(Template { name: name.clone(), project, default_hours: hours });
-    if let Err(e) = save_templates(&templates) {
-        if !silent { eprintln!("Failed to save templates: {}", e); }
-    } else {
-        if !silent { println!("Template '{}' added.", name); }
-    }
+    modify_templates(silent, |templates| {
+        if templates.iter().any(|t| t.name == name) {
+            if !silent { eprintln!("Template '{}' already exists.", name); }
+            return None;
+        }
+        templates.push(Template { name: name.clone(), project, default_hours: hours });
+        Some(format!("Template '{}' added.", name))
+    });
 }
 
 /// Lists all available templates.
@@ -333,37 +263,31 @@ pub fn cmd_template_list() {
 
 /// Removes a template and updates associated tasks.
 pub fn cmd_template_remove(name: String, silent: bool) {
-    let mut templates = load_templates();
-    let len_before = templates.len();
-    templates.retain(|t| t.name != name);
-    
-    if templates.len() == len_before {
-        if !silent { eprintln!("Template '{}' not found.", name); }
-        return;
-    }
-
-    if let Err(e) = save_templates(&templates) {
-        if !silent { eprintln!("Failed to save templates: {}", e); }
-        return;
-    }
-
-    // Update tasks that used this template
-    let mut tasks = load_tasks();
-    let mut updated = false;
-    for t in tasks.iter_mut() {
-        if t.template.as_ref() == Some(&name) {
-            t.template = None;
-            updated = true;
+    let mut removed = false;
+    modify_templates(silent, |templates| {
+        let len_before = templates.len();
+        templates.retain(|t| t.name != name);
+        
+        if templates.len() == len_before {
+            if !silent { eprintln!("Template '{}' not found.", name); }
+            None
+        } else {
+            removed = true;
+            Some(format!("Template '{}' removed.", name))
         }
-    }
+    });
 
-    if updated {
-        if let Err(e) = save_tasks(&tasks) {
-            if !silent { eprintln!("Failed to update tasks: {}", e); }
-        }
+    if removed {
+        // Update tasks that used this template
+        modify_tasks(true, |tasks| {
+            let mut changed = false;
+            for t in tasks.iter_mut().filter(|t| t.template.as_ref() == Some(&name)) {
+                t.template = None;
+                changed = true;
+            }
+            if changed { Some(String::new()) } else { None }
+        });
     }
-
-    if !silent { println!("Template '{}' removed.", name); }
 }
 
 /// Resets the database by deleting all tasks and templates.
@@ -387,20 +311,152 @@ pub fn cmd_reset(force: bool) {
 }
 
 pub fn cmd_template_edit(name: String, project: Option<String>, hours: Option<f64>, silent: bool) {
-    let mut templates = load_templates();
-    if let Some(t) = templates.iter_mut().find(|t| t.name == name) {
+    modify_template(&name, silent, |t| {
         if let Some(p) = project {
             t.project = Some(p);
         }
         if let Some(h) = hours {
             t.default_hours = h;
         }
-        if let Err(e) = save_templates(&templates) {
-            if !silent { eprintln!("Failed to save templates: {}", e); }
-        } else {
-            if !silent { println!("Template '{}' updated.", name); }
+        Some(format!("Template '{}' updated.", name))
+    });
+}
+
+fn modify_task<F>(id: u64, silent: bool, f: F)
+where
+    F: FnOnce(&mut Task) -> Option<String>,
+{
+    let mut t = load_task(id);
+    match t {
+        Some(ref mut task) => {
+            if let Some(msg) = f(task) {
+                if let Err(e) = save_task(task) {
+                    if !silent { eprintln!("Failed to save task: {}", e); }
+                } else {
+                    if !silent { println!("{}", msg); }
+                }
+            }
+        },
+        None => {
+            if !silent { eprintln!("Task {} not found.", id); }
+        }
+    }
+}
+
+fn modify_template<F>(name: &str, silent: bool, f: F)
+where
+    F: FnOnce(&mut Template) -> Option<String>,
+{
+    let mut templates = load_templates();
+    if let Some(t) = templates.iter_mut().find(|t| t.name == name) {
+        if let Some(msg) = f(t) {
+            if let Err(e) = save_templates(&templates) {
+                if !silent { eprintln!("Failed to save templates: {}", e); }
+            } else {
+                if !silent { println!("{}", msg); }
+            }
         }
     } else {
         if !silent { eprintln!("Template '{}' not found.", name); }
     }
+}
+
+fn modify_tasks<F>(silent: bool, f: F)
+where
+    F: FnOnce(&mut Vec<Task>) -> Option<String>,
+{
+    let mut tasks = load_tasks();
+    if let Some(msg) = f(&mut tasks) {
+        if let Err(e) = save_tasks(&tasks) {
+            if !silent { eprintln!("Failed to save tasks: {}", e); }
+        } else if !msg.is_empty() {
+            if !silent { println!("{}", msg); }
+        }
+    }
+}
+
+fn modify_templates<F>(silent: bool, f: F)
+where
+    F: FnOnce(&mut Vec<Template>) -> Option<String>,
+{
+    let mut templates = load_templates();
+    if let Some(msg) = f(&mut templates) {
+        if let Err(e) = save_templates(&templates) {
+            if !silent { eprintln!("Failed to save templates: {}", e); }
+        } else if !msg.is_empty() {
+            if !silent { println!("{}", msg); }
+        }
+    }
+}
+
+fn get_next_recurrence(recur: &str, current: NaiveDate) -> Option<NaiveDate> {
+    match recur.to_lowercase().as_str() {
+        "daily" => Some(current + Duration::days(1)),
+        "weekly" => Some(current + Duration::weeks(1)),
+        "monthly" => Some(current + Duration::days(30)),
+        _ => None,
+    }
+}
+
+fn recalculate_template_average(tmpl_name: &str, silent: bool) {
+    let tasks = load_tasks();
+    let completed_with_template: Vec<&Task> = tasks.iter()
+        .filter(|t| t.completed && t.template.as_deref() == Some(tmpl_name))
+        .collect();
+    
+    if !completed_with_template.is_empty() {
+        let total_worked: f64 = completed_with_template.iter().map(|t| t.hours_worked).sum();
+        let avg = total_worked / completed_with_template.len() as f64;
+        
+        modify_template(tmpl_name, silent, |tmpl| {
+            if !silent { 
+                println!("Updating template '{}' average duration to {:.2}h (based on {} tasks)", 
+                    tmpl_name, avg, completed_with_template.len()); 
+            }
+            tmpl.default_hours = avg;
+            Some(String::new())
+        });
+    }
+}
+
+fn parse_date(date_str: &str) -> Result<NaiveDate, String> {
+    NaiveDate::parse_from_str(date_str, "%Y-%m-%d")
+        .map_err(|e| format!("Invalid due date '{}': {}. Use YYYY-MM-DD.", date_str, e))
+}
+
+fn create_task_row(t: &Task, today: NaiveDate) -> Vec<Cell> {
+    let urgency = compute_urgency(t);
+    let days_left = (t.due_date - today).num_days();
+    let time_left_str = if days_left < 0 {
+        format!("{}d overdue", days_left.abs())
+    } else if days_left == 0 {
+        "Today".to_string()
+    } else {
+        format!("{}d", days_left)
+    };
+
+    let urgency_color = if t.completed {
+        Color::Grey
+    } else if urgency > 50.0 {
+        Color::Red
+    } else if urgency > 20.0 {
+        Color::Yellow
+    } else {
+        Color::Green
+    };
+
+    let status = if t.completed { "Done" } else { "Pending" };
+    let status_color = if t.completed { Color::Green } else { Color::Yellow };
+
+    vec![
+        Cell::new(t.id),
+        Cell::new(&t.name),
+        Cell::new(t.project.as_deref().unwrap_or_default()),
+        Cell::new(t.due_date),
+        Cell::new(time_left_str).fg(if days_left < 0 && !t.completed { Color::Red } else { Color::Reset }),
+        Cell::new(format!("{:.1}", t.hours_worked)),
+        Cell::new(format!("{:.1}", t.expected_hours)),
+        Cell::new(format!("{:.1}", urgency)).fg(urgency_color),
+        Cell::new(status).fg(status_color),
+    ]
 }

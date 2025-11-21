@@ -31,6 +31,17 @@ fn templates_path() -> PathBuf {
     p
 }
 
+/// Loads a single task by its ID.
+/// 
+/// Returns `None` if the task is not found.
+pub fn load_task(id: u64) -> Option<Task> {
+    let tasks = load_tasks();
+    if let Some(t) = tasks.iter().find(|t| t.id == id) {
+        return Some(t.clone());
+    }
+    None
+}
+
 /// Loads all tasks from the storage file.
 ///
 /// Returns an empty vector if the file does not exist or cannot be read.
@@ -48,6 +59,20 @@ pub fn load_tasks() -> Vec<Task> {
         return Vec::new();
     }
     serde_json::from_str(&s).unwrap_or_else(|_| Vec::new())
+}
+
+/// Saves or updates a single task in the storage file.
+/// 
+/// If the task with the same ID exists, it is updated; otherwise, it is added.
+pub fn save_task(task: &Task) -> std::io::Result<()> {
+    let mut tasks = load_tasks();
+    if let Some(t) = tasks.iter_mut().find(|t| t.id == task.id) {
+        *t = task.clone();
+    }
+    else {
+        tasks.push(task.clone());
+    }
+    save_tasks(&tasks)
 }
 
 /// Saves the given list of tasks to the storage file.
@@ -93,6 +118,15 @@ pub fn save_templates(templates: &Vec<Template>) -> std::io::Result<()> {
         .open(&path)?;
     f.write_all(s.as_bytes())?;
     Ok(())
+}
+
+/// Loads a single template by its name.
+pub fn load_template(name: &str) -> Option<Template> {
+    let templates = load_templates();
+    if let Some(t) = templates.iter().find(|t| t.name == name) {
+        return Some(t.clone());
+    }
+    None
 }
 
 /// Deletes the tasks and templates database files.

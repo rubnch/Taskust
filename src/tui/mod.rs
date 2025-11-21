@@ -62,6 +62,7 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                     KeyCode::Char('t') => app.start_edit(InputField::Due), // 't' for Time/Date
                     KeyCode::Char('h') => app.start_edit(InputField::Hours),
                     KeyCode::Char('r') => app.start_edit(InputField::Recur),
+                    KeyCode::Char('m') => app.start_edit(InputField::Template),
                     KeyCode::Char('l') => app.start_edit(InputField::LogHours),
                     KeyCode::Char('u') => app.start_edit(InputField::EstimateHours), // 'u' for Update
                     KeyCode::Char('c') => app.toggle_completed(),

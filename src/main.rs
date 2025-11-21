@@ -184,6 +184,9 @@ enum Commands {
         /// New recurrence
         #[arg(short, long)]
         recur: Option<String>,
+        /// New template
+        #[arg(short, long)]
+        template: Option<String>,
     },
     /// Log hours worked on a task
     Log {
@@ -257,7 +260,7 @@ fn main() {
         Some(Commands::List { all }) => cmd_list(all),
         Some(Commands::Complete { id }) => cmd_complete(id, false),
         Some(Commands::Remove { id }) => cmd_remove(id, false),
-        Some(Commands::Edit { id, name, project, hours, due, recur }) => cmd_edit(id, name, project, hours, Some(0.0), due, recur, false),
+        Some(Commands::Edit { id, name, project, hours, due, recur, template }) => cmd_edit(id, name, project, template, hours, None, due, recur, false),
         Some(Commands::Log { id, hours }) => cmd_log(id, hours, false),
         Some(Commands::Estimate { id, remaining }) => cmd_estimate(id, remaining, false),
         Some(Commands::Template { command }) => match command {
