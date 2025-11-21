@@ -11,7 +11,7 @@ use ratatui::{
     backend::{Backend, CrosstermBackend},
     Terminal,
 };
-use app::{App, InputMode, InputField};
+use app::{App, InputMode, InputField, ViewMode};
 use ui::ui;
 
 pub fn run_tui() -> Result<(), Box<dyn Error>> {
@@ -67,7 +67,13 @@ fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> io::Result<
                     KeyCode::Char('u') => app.start_edit(InputField::EstimateHours), // 'u' for Update
                     KeyCode::Char('c') => app.toggle_completed(),
                     KeyCode::Char('v') => app.toggle_view(),
-                    KeyCode::Enter => app.start_add_from_template(),
+                    KeyCode::Char('g') => app.toggle_group_view(),
+                    KeyCode::Enter => {
+                        match app.view_mode {
+                            ViewMode::Tasks => app.toggle_project_expansion(),
+                            ViewMode::Templates => app.start_add_from_template(),
+                        }
+                    },
                     _ => {}
                 },
                 InputMode::Editing | InputMode::Adding => match key.code {

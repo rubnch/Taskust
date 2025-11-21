@@ -6,8 +6,9 @@ use ratatui::{
 };
 use chrono::Local;
 use crate::urgency::compute_urgency;
-use super::app::{App, InputMode, ViewMode, InputField};
+use super::app::{App, InputMode, ViewMode, InputField, DisplayItem};
 
+/// Renders the main UI loop.
 pub fn ui(f: &mut Frame, app: &mut App) {
     let chunks = Layout::default()
         .direction(Direction::Vertical)
@@ -18,13 +19,24 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         .split(f.area());
 
     match app.view_mode {
-        ViewMode::Tasks => {
-            let today = Local::now().date_naive();
+        ViewMode::Tasks => render_tasks(f, app, chunks[0]),
+        ViewMode::Templates => render_templates(f, app, chunks[0]),
+    }
 
-            let rows: Vec<Row> = app
-                .tasks
-                .iter()
-                .map(|t| {
+    render_help(f, app, chunks[1]);
+    render_input_popup(f, app);
+}
+
+/// Renders the task list table.
+fn render_tasks(f: &mut Frame, app: &mut App, area: Rect) {
+    let today = Local::now().date_naive();
+
+    let rows: Vec<Row> = app
+        .display_items
+        .iter()
+        .map(|item| {
+            match item {
+                DisplayItem::Task(t) => {
                     let urgency = compute_urgency(t);
                     let days_left = (t.due_date - today).num_days();
                     let time_left_str = if days_left < 0 {
@@ -43,9 +55,15 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         Style::default().fg(Color::Green)
                     };
                     
+                    let name_display = if app.group_by_project {
+                        format!("  {}", t.name)
+                    } else {
+                        t.name.clone()
+                    };
+
                     Row::new(vec![
                         Cell::from(t.id.to_string()),
-                        Cell::from(t.name.clone()),
+                        Cell::from(name_display),
                         Cell::from(t.project.clone().unwrap_or_default()),
                         Cell::from(t.template.clone().unwrap_or_default()),
                         Cell::from(t.due_date.to_string()),
@@ -55,66 +73,87 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                         Cell::from(format!("{:.1}", urgency)),
                         Cell::from(if t.completed { "Done" } else { "Pending" }),
                     ]).style(style)
-                })
-                .collect();
-
-            let widths = [
-                Constraint::Length(4),
-                Constraint::Min(20),
-                Constraint::Length(10),
-                Constraint::Length(10),
-                Constraint::Length(12),
-                Constraint::Length(12),
-                Constraint::Length(6),
-                Constraint::Length(6),
-                Constraint::Length(6),
-                Constraint::Length(8),
-            ];
-
-            let table = Table::new(rows, widths)
-                .header(Row::new(vec!["ID", "Name", "Project", "Template", "Due", "Time Left", "Worked", "Est", "Urg", "Status"])
-                    .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-                    .bottom_margin(1))
-                .block(Block::default().borders(Borders::ALL).title("Taskust - Tasks"))
-                .row_highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray))
-                .highlight_symbol(">> ");
-
-            f.render_stateful_widget(table, chunks[0], &mut app.state);
-        }
-        ViewMode::Templates => {
-            let rows: Vec<Row> = app
-                .templates
-                .iter()
-                .map(|t| {
+                },
+                DisplayItem::ProjectHeader(name, count) => {
+                    let style = Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD);
+                    let icon = if app.expanded_projects.contains(name) { "▼" } else { "▶" };
                     Row::new(vec![
-                        Cell::from(t.name.clone()),
-                        Cell::from(t.project.clone().unwrap_or_default()),
-                        Cell::from(format!("{:.1}", t.default_hours)),
-                    ])
-                })
-                .collect();
+                        Cell::from(""),
+                        Cell::from(format!("{} {} ({})", icon, name, count)),
+                        Cell::from(""),
+                        Cell::from(""),
+                        Cell::from(""),
+                        Cell::from(""),
+                        Cell::from(""),
+                        Cell::from(""),
+                        Cell::from(""),
+                        Cell::from(""),
+                    ]).style(style)
+                }
+            }
+        })
+        .collect();
 
-            let widths = [
-                Constraint::Min(20),
-                Constraint::Length(20),
-                Constraint::Length(10),
-            ];
+    let widths = [
+        Constraint::Length(4),
+        Constraint::Min(20),
+        Constraint::Length(10),
+        Constraint::Length(10),
+        Constraint::Length(12),
+        Constraint::Length(12),
+        Constraint::Length(6),
+        Constraint::Length(6),
+        Constraint::Length(6),
+        Constraint::Length(8),
+    ];
 
-            let table = Table::new(rows, widths)
-                .header(Row::new(vec!["Name", "Project", "Est Hours"])
-                    .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
-                    .bottom_margin(1))
-                .block(Block::default().borders(Borders::ALL).title("Taskust - Templates"))
-                .row_highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray))
-                .highlight_symbol(">> ");
+    let table = Table::new(rows, widths)
+        .header(Row::new(vec!["ID", "Name", "Project", "Template", "Due", "Time Left", "Worked", "Est", "Urg", "Status"])
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .bottom_margin(1))
+        .block(Block::default().borders(Borders::ALL).title("Taskust - Tasks"))
+        .row_highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray))
+        .highlight_symbol(">> ");
 
-            f.render_stateful_widget(table, chunks[0], &mut app.template_state);
-        }
-    }
+    f.render_stateful_widget(table, area, &mut app.state);
+}
 
+/// Renders the template list table.
+fn render_templates(f: &mut Frame, app: &mut App, area: Rect) {
+    let rows: Vec<Row> = app
+        .templates
+        .iter()
+        .map(|t| {
+            Row::new(vec![
+                Cell::from(t.name.clone()),
+                Cell::from(t.project.clone().unwrap_or_default()),
+                Cell::from(format!("{:.1}", t.default_hours)),
+            ])
+        })
+        .collect();
+
+    let widths = [
+        Constraint::Min(20),
+        Constraint::Length(20),
+        Constraint::Length(10),
+    ];
+
+    let table = Table::new(rows, widths)
+        .header(Row::new(vec!["Name", "Project", "Est Hours"])
+            .style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+            .bottom_margin(1))
+        .block(Block::default().borders(Borders::ALL).title("Taskust - Templates"))
+        .row_highlight_style(Style::default().add_modifier(Modifier::BOLD).bg(Color::DarkGray))
+        .highlight_symbol(">> ");
+
+    f.render_stateful_widget(table, area, &mut app.template_state);
+}
+
+/// Renders the help text at the bottom of the screen.
+fn render_help(f: &mut Frame, app: &App, area: Rect) {
     let help_text = match app.input_mode {
         InputMode::Normal => match app.view_mode {
-            ViewMode::Tasks => "q: Quit | a: Add | n: Name | p: Proj | t: Due | h: Hrs | r: Recur | m: Tmpl | l: Log | u: Est | c: Toggle Done | Space: Done | d: Del | v: View Templates",
+            ViewMode::Tasks => "q: Quit | a: Add | n: Name | p: Proj | t: Due | h: Hrs | r: Recur | m: Tmpl | l: Log | u: Est | c: Toggle Done | Space: Done | d: Del | v: View Templates | g: Group",
             ViewMode::Templates => "q: Quit | a: Add | v: View Tasks | Enter: Create Task from Template | d: Del",
         },
         InputMode::Editing => "Enter: Save | Esc: Cancel",
@@ -125,9 +164,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
         .style(Style::default().fg(Color::Gray))
         .block(Block::default().borders(Borders::ALL));
     
-    f.render_widget(help, chunks[1]);
+    f.render_widget(help, area);
+}
 
-    // Render Input Box if needed
+/// Renders the input popup for adding/editing tasks.
+fn render_input_popup(f: &mut Frame, app: &App) {
     match app.input_mode {
         InputMode::Editing | InputMode::Adding => {
             let area = centered_rect(60, 3, f.area()); // Fixed height of 3 (border + 1 line)
@@ -149,10 +190,11 @@ pub fn ui(f: &mut Frame, app: &mut App) {
                             ViewMode::Tasks => {
                                 match app.add_state.step {
                                     0 => "Add Task: Enter Name",
-                                    1 => "Add Task: Enter Project (Optional)",
-                                    2 => "Add Task: Enter Due Date (YYYY-MM-DD)",
+                                    1 => "Add Task: Enter Due Date (YYYY-MM-DD)",
+                                    2 => "Add Task: Enter Project (Optional)",
                                     3 => "Add Task: Enter Expected Hours",
                                     4 => "Add Task: Enter Recurrence (Optional)",
+                                    5 => "Add Task: Enter Template (Optional)",
                                     _ => "Add Task",
                                 }
                             }

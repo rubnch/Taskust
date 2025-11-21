@@ -10,6 +10,7 @@ A powerful, terminal-based task manager written in Rust. Taskust combines a fast
     *   **TUI**: Interactive dashboard to manage tasks visually.
 *   **Templates**: Create reusable task templates for common workflows.
 *   **Recurrence**: Support for daily, weekly, and monthly recurring tasks.
+*   **Project Grouping**: Toggle between a flat list and a project-grouped view in the TUI.
 *   **Data Persistence**: Tasks are stored in standard XDG data directories (JSON format).
 
 ## Installation
@@ -47,7 +48,9 @@ taskust ui
 *   `t`: Edit due date
 *   `h`: Edit expected hours
 *   `r`: Edit recurrence
+*   `m`: Edit template
 *   `v`: Switch to Templates view
+*   `g`: Toggle Group by Project view
 
 **Template View**
 *   `a`: Add new template

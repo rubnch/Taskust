@@ -31,15 +31,7 @@ pub fn cmd_add(name: String, project: Option<String>, hours: Option<f64>, due: S
                 final_hours = tmpl.default_hours;
             }
         } else {
-            if !silent { println!("Template '{}' not found. Creating it.", t_name); }
-            modify_templates(silent, |templates| {
-                templates.push(Template {
-                    name: t_name.clone(),
-                    project: final_project.clone(),
-                    default_hours: final_hours,
-                });
-                None
-            });
+            create_template_if_missing(t_name, &final_project, final_hours, silent);
         }
     }
 
@@ -148,7 +140,10 @@ pub fn cmd_edit(
     modify_task(id, silent, |task| {
         if let Some(n) = name { task.name = n; }
         if let Some(p) = project { task.project = Some(p); }
-        if let Some(tmpl) = template_name { task.template = Some(tmpl); }
+        if let Some(tmpl) = template_name { 
+            task.template = Some(tmpl.clone());
+            create_template_if_missing(&tmpl, &task.project, task.expected_hours, silent);
+        }
         if let Some(h) = expected_hours { task.expected_hours = h; }
         if let Some(h) = hours_worked { task.hours_worked = h; }
         if let Some(r) = recur { task.recurrence = Some(r); }
@@ -310,6 +305,7 @@ pub fn cmd_reset(force: bool) {
     }
 }
 
+/// Edits an existing template.
 pub fn cmd_template_edit(name: String, project: Option<String>, hours: Option<f64>, silent: bool) {
     modify_template(&name, silent, |t| {
         if let Some(p) = project {
@@ -459,4 +455,21 @@ fn create_task_row(t: &Task, today: NaiveDate) -> Vec<Cell> {
         Cell::new(format!("{:.1}", urgency)).fg(urgency_color),
         Cell::new(status).fg(status_color),
     ]
+}
+
+/// Helper function to create a template if it doesn't exist.
+///
+/// This is used when adding or editing a task with a template name that is not yet in the database.
+fn create_template_if_missing(name: &str, project: &Option<String>, hours: f64, silent: bool) {
+    if load_template(name).is_none() {
+        if !silent { println!("Template '{}' not found. Creating it.", name); }
+        modify_templates(silent, |templates| {
+            templates.push(Template {
+                name: name.to_string(),
+                project: project.clone(),
+                default_hours: hours,
+            });
+            None
+        });
+    }
 }
