@@ -28,6 +28,9 @@ pub struct Task {
     /// Recurrence pattern (e.g., "daily", "weekly", "monthly").
     #[serde(default)]
     pub recurrence: Option<String>,
+    /// Timestamp when the task was completed (ISO 8601).
+    #[serde(default)]
+    pub completed_at: Option<String>,
 }
 
 /// Represents a reusable task template.

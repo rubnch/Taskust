@@ -3,7 +3,7 @@ use chrono::{Local, NaiveDate, Duration};
 use comfy_table::presets::UTF8_FULL;
 use comfy_table::{Attribute, Cell, Color, ContentArrangement, Table};
 use crate::models::{Task, Template};
-use crate::storage::{delete_database, load_task, load_tasks, load_template, load_templates, save_tasks, save_task, save_templates};
+use crate::storage::{delete_database, load_task, load_tasks, load_template, load_templates, save_tasks, save_task, save_templates, append_to_archive};
 use crate::urgency::compute_urgency;
 
 /// Adds a new task to the database.
@@ -48,6 +48,7 @@ pub fn cmd_add(name: String, project: Option<String>, hours: Option<f64>, due: S
             hours_worked: 0.0,
             template: template_name,
             recurrence: recur,
+            completed_at: None,
         };
         tasks.push(t);
         Some(format!("Task added (id = {})", next_id))
@@ -65,6 +66,7 @@ pub fn cmd_complete(id: u64, silent: bool) {
         
         if let Some(t) = tasks.iter_mut().find(|t| t.id == id) {
             t.completed = true;
+            t.completed_at = Some(Local::now().to_rfc3339());
             if !silent { println!("Task {} marked as complete.", id); }
 
             if let Some(recur) = &t.recurrence {
@@ -80,6 +82,7 @@ pub fn cmd_complete(id: u64, silent: bool) {
                         hours_worked: 0.0,
                         template: t.template.clone(),
                         recurrence: t.recurrence.clone(),
+                        completed_at: None,
                     });
                     if !silent { println!("Recurring task created due on {}", due); }
                 } else if !silent {
@@ -315,6 +318,49 @@ pub fn cmd_template_edit(name: String, project: Option<String>, hours: Option<f6
             t.default_hours = h;
         }
         Some(format!("Template '{}' updated.", name))
+    });
+}
+
+/// Archives completed tasks.
+///
+/// If `days` is provided, archives tasks completed more than `days` ago.
+/// Otherwise, archives all completed tasks.
+pub fn cmd_archive(days: Option<i64>, silent: bool) {
+    let tasks = load_tasks();
+    let now = Local::now();
+    
+    let tasks_to_archive: Vec<Task> = tasks.into_iter().filter(|t| {
+        if !t.completed { return false; }
+        if let Some(d) = days {
+            if let Some(completed_at_str) = &t.completed_at {
+                if let Ok(completed_at) = chrono::DateTime::parse_from_rfc3339(completed_at_str) {
+                        let age = now.signed_duration_since(completed_at).num_days();
+                        return age >= d;
+                }
+            }
+            // If completed but no date (legacy), treat as very old -> archive
+            return true;
+        }
+        true
+    }).collect();
+
+    if tasks_to_archive.is_empty() {
+        if !silent { println!("No tasks found to archive."); }
+        return;
+    }
+
+    if let Err(e) = append_to_archive(tasks_to_archive.clone()) {
+        if !silent { eprintln!("Failed to archive tasks: {}", e); }
+        return;
+    }
+
+    let archived_ids: Vec<u64> = tasks_to_archive.iter().map(|t| t.id).collect();
+    
+    modify_tasks(silent, |tasks| {
+        let len_before = tasks.len();
+        tasks.retain(|t| !archived_ids.contains(&t.id));
+        let removed = len_before - tasks.len();
+        Some(format!("Archived {} tasks.", removed))
     });
 }
 

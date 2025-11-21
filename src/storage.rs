@@ -31,6 +31,16 @@ fn templates_path() -> PathBuf {
     p
 }
 
+/// Returns the path to the archive database file (`archive.json`).
+///
+/// Located in the same directory as the tasks database.
+fn archive_path() -> PathBuf {
+    let mut p = db_path();
+    p.pop();
+    p.push("archive.json");
+    p
+}
+
 /// Loads a single task by its ID.
 /// 
 /// Returns `None` if the task is not found.
@@ -139,5 +149,38 @@ pub fn delete_database() -> std::io::Result<()> {
     if tmpl_path.exists() {
         fs::remove_file(tmpl_path)?;
     }
+    Ok(())
+}
+
+/// Loads all archived tasks from the storage file.
+pub fn load_archived_tasks() -> Vec<Task> {
+    let path = archive_path();
+    if !path.exists() {
+        return Vec::new();
+    }
+    let mut f = match OpenOptions::new().read(true).open(&path) {
+        Ok(f) => f,
+        Err(_) => return Vec::new(),
+    };
+    let mut s = String::new();
+    if f.read_to_string(&mut s).is_err() {
+        return Vec::new();
+    }
+    serde_json::from_str(&s).unwrap_or_else(|_| Vec::new())
+}
+
+/// Appends tasks to the archive file.
+pub fn append_to_archive(new_tasks: Vec<Task>) -> std::io::Result<()> {
+    let mut archive = load_archived_tasks();
+    archive.extend(new_tasks);
+    
+    let path = archive_path();
+    let s = serde_json::to_string_pretty(&archive).unwrap();
+    let mut f = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .open(&path)?;
+    f.write_all(s.as_bytes())?;
     Ok(())
 }

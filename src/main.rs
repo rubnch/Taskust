@@ -211,6 +211,12 @@ enum Commands {
         #[arg(short, long)]
         force: bool,
     },
+    /// Archive completed tasks
+    Archive {
+        /// Archive tasks completed more than X days ago
+        #[arg(short, long)]
+        days: Option<i64>,
+    },
     /// Generate shell completions
     Completions {
         /// Shell to generate completions for (bash, zsh, fish, powershell, elvish)
@@ -270,6 +276,7 @@ fn main() {
             TemplateCommands::Edit { name, project, hours } => cmd_template_edit(name, project, hours, false),
         },
         Some(Commands::Reset { force }) => cmd_reset(force),
+        Some(Commands::Archive { days }) => cmd_archive(days, false),
         Some(Commands::Completions { shell }) => {
             let shell_enum = match shell.as_str() {
                 "bash" => Shell::Bash,
